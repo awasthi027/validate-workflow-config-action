@@ -1,0 +1,81 @@
+name: 'Validate Workflow Configuration'
+description: 'Check and validate workflow configuration json file by given path'
+inputs:
+  config-path:
+    description: 'Path to the file to be validated and read.'
+    required: true
+  schema-paths:
+    description: 'Newline-separated paths to JSON schema files for validation (optional)'
+    required: false
+    default: ''
+  installPython:
+    description: 'Pass `true` string if Python is not present on the action runner'
+    required: false
+    default: 'false'
+  runtime-overrides:
+    description: 'Custom runtime overrides'
+    required: false
+    default: ''
+
+outputs:
+  config-content:
+    description: 'Content of the config file.'
+    value: ${{ steps.validateFile.outputs.config-content }}
+  config-content-base64:
+    description: 'Content of the config file in base64 format'
+    value: ${{ steps.validateFile.outputs.config-content-base64 }}
+
+runs:
+  using: "composite"
+  steps:
+
+    - uses: actions/setup-python@v4
+      if: ${{ inputs.installPython == 'true' || inputs.installPython == 'on' ||
+              inputs.installPython == 'yes' }}
+      with:
+        python-version: '3.11'
+        cache: 'pip' # caching pip dependencies
+
+    - name: Set up Python venv
+      run: |
+        if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+          echo "Windows detected, using 'python' as binary"
+          python -m venv venv
+          echo "PYTHON_COMMAND=venv/Scripts/python" >> $GITHUB_ENV
+        else
+          if command -v python3 &> /dev/null; then
+            echo "Using 'python3' as binary"
+            python3 -m venv venv
+          elif command -v python &> /dev/null; then
+            echo "Using 'python' as binary"
+            python -m venv venv
+          else
+            echo "Fatal error: 'python' or 'python3' not found in PATH"
+            exit 1
+          fi
+          echo "PYTHON_COMMAND=venv/bin/python" >> $GITHUB_ENV
+        fi
+      shell: bash
+
+    - name: Escape action_path
+      run: |
+        echo "ACTION_PATH_NORMALIZED=$(echo "$GITHUB_ACTION_PATH" | sed 's|\\|/|g')" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Set up venv
+      run: |
+        ${{ env.PYTHON_COMMAND }} -m pip install --upgrade --prefer-binary -r ${{ env.ACTION_PATH_NORMALIZED }}/requirements.txt
+      shell: bash
+
+    - name: Validate and read the Workflow Configuration
+      id: validateFile
+      run: |
+        SCHEMA_PATHS="${{ inputs.schema-paths }}"
+        SCHEMA_PATHS="${SCHEMA_PATHS//$'\n'/ }" # Replace newlines with spaces
+        content=$(${{ env.PYTHON_COMMAND }} ${{ env.ACTION_PATH_NORMALIZED }}/validate_workflow_config.py ${{ inputs.config-path }} '${{ inputs.runtime-overrides }}' $SCHEMA_PATHS | tr -d '\n' | tr -d '\r')
+        echo "File content within action: $content"
+        echo "config-content=$content" >> $GITHUB_OUTPUT
+        # Used by unit tests
+        echo "config-content-base64=$(echo -n "$content" | base64 | tr -d '\n')" >> $GITHUB_OUTPUT
+      shell: bash
+  
